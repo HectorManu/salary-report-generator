@@ -5,7 +5,6 @@
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
 from datetime import datetime
 import random
 from faker import Faker
@@ -32,13 +31,13 @@ def obtener_autenticacion_google():
 
 def crear_hoja_google(nombre_hoja):
     """
-    Crea una nueva hoja de cálculo en Google Sheets con una sola hoja de trabajo.
+    Crea una nueva hoja de cálculo en Google Sheets con dos hojas de trabajo.
     
     Args:
         nombre_hoja (str): Nombre de la nueva hoja de cálculo.
     
     Returns:
-        tuple: ID de la hoja de cálculo creada y el objeto de la hoja de trabajo.
+        tuple: ID de la hoja de cálculo creada y los objetos de las hojas de trabajo.
     """
     credenciales = obtener_autenticacion_google()
     cliente = gspread.authorize(credenciales)
@@ -47,15 +46,18 @@ def crear_hoja_google(nombre_hoja):
     hoja_calculo = cliente.create(nombre_hoja)
     id_hoja = hoja_calculo.id
     
-    # Renombrar la primera hoja (por defecto 'Sheet1') a 'Reporte de Salarios'
-    hoja_trabajo = hoja_calculo.get_worksheet(0)
-    hoja_trabajo.update_title("Reporte de Salarios")
+    # Renombrar la primera hoja a 'Datos Empleados'
+    hoja_datos = hoja_calculo.get_worksheet(0)
+    hoja_datos.update_title("Datos Empleados")
+    
+    # Crear una segunda hoja llamada 'Reporte de Salarios'
+    hoja_reporte = hoja_calculo.add_worksheet(title="Reporte de Salarios", rows="100", cols="20")
     
     # Configurar permisos para que cualquiera con el enlace pueda ver
     hoja_calculo.share('', perm_type='anyone', role='reader')
     
     print(f"Hoja de cálculo creada con ID: {id_hoja}")
-    return id_hoja, hoja_trabajo
+    return id_hoja, hoja_datos, hoja_reporte
 
 def compartir_hoja_google(id_hoja, email):
     """
@@ -80,22 +82,10 @@ def escribir_en_google_sheets(df, hoja_trabajo):
         hoja_trabajo (Worksheet): Objeto de hoja de trabajo de gspread.
     """
     hoja_trabajo.clear()
-    hoja_trabajo.update([df.columns.values.tolist()] + df.values.tolist())
-    print("Datos escritos en la hoja de cálculo.")
-
-def cambiar_nombre_hoja_calculo(id_hoja, nuevo_nombre):
-    """
-    Cambia el nombre de una hoja de cálculo de Google Sheets.
-    
-    Args:
-        id_hoja (str): ID de la hoja de cálculo.
-        nuevo_nombre (str): Nuevo nombre para la hoja de cálculo.
-    """
-    credenciales = obtener_autenticacion_google()
-    cliente = gspread.authorize(credenciales)
-    hoja_calculo = cliente.open_by_key(id_hoja)
-    hoja_calculo.update_title(nuevo_nombre)
-    print(f"Hoja de cálculo renombrada a: {nuevo_nombre}")
+    # Convertir todas las columnas a string para evitar problemas de serialización
+    df_string = df.astype(str)
+    hoja_trabajo.update([df_string.columns.values.tolist()] + df_string.values.tolist())
+    print(f"Datos escritos en la hoja: {hoja_trabajo.title}")
 
 ## 4. Generación y procesamiento de datos
 
@@ -120,7 +110,7 @@ def generar_datos_empleados(num_empleados=10):
         datos_empleados.append({
             "Nombre": nombre,
             "Salario Mensual": salario,
-            "Fecha de Contratación": fecha_contratacion
+            "Fecha de Contratación": fecha_contratacion.strftime('%Y-%m-%d')  # Convertir fecha a string
         })
     
     return pd.DataFrame(datos_empleados)
@@ -141,11 +131,13 @@ def procesar_datos_empleados(df):
     df['Salario Anual'] = df['Salario Mensual'] * 12
     
     fecha_actual = datetime.now()
-    df['Años en la Empresa'] = (fecha_actual - df['Fecha de Contratación']).dt.days // 365
+    df['Años en la Empresa'] = ((fecha_actual - df['Fecha de Contratación']).dt.days / 365).round(2)
     
-    df['Fecha de Contratación'] = df['Fecha de Contratación'].dt.strftime('%Y-%m-%d')
+    # Redondear salarios a dos decimales
+    df['Salario Mensual'] = df['Salario Mensual'].round(2)
+    df['Salario Anual'] = df['Salario Anual'].round(2)
     
-    return df[['Nombre', 'Salario Mensual', 'Salario Anual', 'Fecha de Contratación', 'Años en la Empresa']]
+    return df[['Nombre', 'Salario Mensual', 'Salario Anual', 'Años en la Empresa']]
 
 ## 5. Ejecución principal
 
@@ -155,17 +147,19 @@ def main():
     """
     # Generar datos de muestra
     df_empleados = generar_datos_empleados(10)
-    df_empleados.to_csv('empleados.csv', index=False)
     
     # Crear y configurar la hoja de Google
-    nombre_hoja = "Reporte de Salarios"
-    id_hoja, hoja_trabajo = crear_hoja_google(nombre_hoja)
+    nombre_hoja = "Informe de Salarios"
+    id_hoja, hoja_datos, hoja_reporte = crear_hoja_google(nombre_hoja)
     correo_personal = "hectormanujuarez1987@gmail.com"  # Reemplaza con tu correo
     compartir_hoja_google(id_hoja, correo_personal)
     
-    # Procesar y escribir datos
+    # Escribir datos originales en la primera hoja
+    escribir_en_google_sheets(df_empleados, hoja_datos)
+    
+    # Procesar datos y escribir en la segunda hoja
     df_procesado = procesar_datos_empleados(df_empleados)
-    escribir_en_google_sheets(df_procesado, hoja_trabajo)
+    escribir_en_google_sheets(df_procesado, hoja_reporte)
     
     print(f"Proceso completado. La hoja de cálculo es accesible para cualquier persona con este enlace:")
     print(f"https://docs.google.com/spreadsheets/d/{id_hoja}")
